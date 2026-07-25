@@ -56,13 +56,6 @@ using namespace py::literals;
 
 namespace pybind11::detail {
 template <typename T>
-constexpr auto OeadGetSpanCasterName() {
-  if constexpr (std::is_same_v<std::decay_t<T>, u8>)
-    return _("BytesLike");
-  return _("Span[") + detail::concat(make_caster<T>::name) + _("]");
-}
-
-template <typename T>
 struct type_caster<tcb::span<T>> {
   static handle cast(tcb::span<T> span, return_value_policy, handle) {
     return py::memoryview::from_memory(span.data(), ssize_t(span.size_bytes())).release();
@@ -76,7 +69,7 @@ struct type_caster<tcb::span<T>> {
     return true;
   }
 
-  PYBIND11_TYPE_CASTER(tcb::span<T>, OeadGetSpanCasterName<T>());
+  PYBIND11_TYPE_CASTER(tcb::span<T>, _("Span"));
 };
 }  // namespace pybind11::detail
 
@@ -130,41 +123,79 @@ template <typename Map, typename holder_type = std::unique_ptr<Map>, typename...
 py::class_<Map, holder_type> BindMap(py::handle scope, const std::string& name, Args&&... args) {
   using Key = typename Map::key_type;
   using Value = typename Map::mapped_type;
-  auto cl = py::bind_map<Map, holder_type>(scope, name, std::forward<Args>(args)...)
-                .def(py::init([&](py::iterator it) {
-                       return MapFromIter<Map, Key>(it, MapCastValue<Map, Key, Value>);
-                     }),
-                     "iterator"_a)
-                .def(py::init([&](py::dict dict) {
-                       return MapFromDict<Map, Key>(dict, MapCastValue<Map, Key, Value>);
-                     }),
-                     "dictionary"_a)
-                .def(py::self == py::self)
-                .def(
-                    "__contains__",
-                    [](const Map& map, const py::object& arg) {
-                      try {
-                        auto key = py::cast<Key>(arg);
-                        return map.find(key) != map.end();
-                      } catch (const py::cast_error&) {
-                        return false;
-                      }
-                    },
-                    py::prepend{})
-                .def("clear", &Map::clear)
-                .def(
-                    "get",
-                    [](const Map& map, const Key& key,
-                       std::optional<py::object> default_value) -> std::variant<py::object, Value> {
-                      const auto it = map.find(key);
-                      if (it == map.cend()) {
-                        if (default_value)
-                          return *default_value;
-                        throw py::key_error();
-                      }
-                      return it->second;
-                    },
-                    "key"_a, "default"_a = std::nullopt, py::keep_alive<0, 1>());
+  py::class_<Map, holder_type> cl(scope, name.c_str(), std::forward<Args>(args)...);
+  cl.def(py::init<>())
+      .def(py::init([&](py::iterator it) {
+        return MapFromIter<Map, Key>(it, MapCastValue<Map, Key, Value>);
+      }),
+           "iterator"_a)
+      .def(py::init([&](py::dict dict) {
+        return MapFromDict<Map, Key>(dict, MapCastValue<Map, Key, Value>);
+      }),
+           "dictionary"_a)
+      .def(py::self == py::self)
+      .def("__bool__", [](const Map& map) { return !map.empty(); })
+      .def("__len__", [](const Map& map) { return map.size(); })
+      .def("__iter__", [](Map& map) { return py::make_key_iterator(map.begin(), map.end()); },
+           py::keep_alive<0, 1>())
+      .def("keys", [](const Map& map) {
+        py::list keys;
+        for (const auto& [key, value] : map)
+          keys.append(py::cast(key));
+        return keys;
+      })
+      .def("values", [](const Map& map) {
+        py::list values;
+        for (const auto& [key, value] : map)
+          values.append(py::cast(value));
+        return values;
+      })
+      .def("items", [](const Map& map) {
+        py::list items;
+        for (const auto& [key, value] : map)
+          items.append(py::make_tuple(key, value));
+        return items;
+      })
+      .def("__getitem__", [](Map& map, const Key& key) -> Value& {
+        if (map.find(key) == map.end())
+          throw py::key_error();
+        return map.at(key);
+      },
+           py::return_value_policy::reference_internal)
+      .def("__setitem__", [](Map& map, Key key, Value value) {
+        map[std::move(key)] = std::move(value);
+      })
+      .def("__delitem__", [](Map& map, const Key& key) {
+        const auto it = map.find(key);
+        if (it == map.end())
+          throw py::key_error();
+        map.erase(it);
+      })
+      .def(
+          "__contains__",
+          [](const Map& map, const py::object& arg) {
+            try {
+              auto key = py::cast<Key>(arg);
+              return map.find(key) != map.end();
+            } catch (const py::cast_error&) {
+              return false;
+            }
+          },
+          py::prepend{})
+      .def("clear", &Map::clear)
+      .def(
+          "get",
+          [](const Map& map, const Key& key,
+             std::optional<py::object> default_value) -> std::variant<py::object, Value> {
+            const auto it = map.find(key);
+            if (it == map.cend()) {
+              if (default_value)
+                return *default_value;
+              throw py::key_error();
+            }
+            return it->second;
+          },
+          "key"_a, "default"_a = std::nullopt, py::keep_alive<0, 1>());
   py::implicitly_convertible<py::dict, Map>();
   return cl;
 }

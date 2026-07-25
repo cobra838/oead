@@ -29,11 +29,12 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
 
     def build_extension(self, ext):
-        debug = bool(os.getenv('DEBUG', False))
+        debug = os.getenv("DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.name)))
         cmake_args = ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=' + extdir,
-                      '-DPYTHON_EXECUTABLE=' + sys.executable]
+                      '-DPYTHON_EXECUTABLE=' + sys.executable,
+                      '-DPython_EXECUTABLE=' + sys.executable]
 
         cfg = 'Debug' if debug else 'Release'
         build_args = [f'-j{os.cpu_count()}', '--config', cfg]
