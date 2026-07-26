@@ -159,7 +159,9 @@ template <typename Map, typename Class_>
 void DefineCustomMap(Class_& cl) {
   using KeyType = typename Map::key_type;
   using MappedType = typename Map::mapped_type;
-  
+
+  cl.def(py::self == py::self);
+
   cl.def(py::init([&](py::iterator it) {
       return MapFromIter<Map, KeyType>(it, MapCastValue<Map, KeyType, MappedType>);
     }),
