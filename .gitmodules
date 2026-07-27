@@ -1,10 +1,10 @@
-[submodule "rapidyaml"]
+[submodule "lib/rapidyaml"]
 	path = lib/rapidyaml
-	url = https://github.com/leoetlino/rapidyaml
-[submodule "src/lib/pybind11"]
+	url = https://github.com/biojppm/rapidyaml
+[submodule "lib/pybind11"]
 	path = lib/pybind11
-	url = https://github.com/leoetlino/pybind11
-[submodule "src/lib/libyaml"]
+	url = https://github.com/pybind/pybind11
+[submodule "lib/libyaml"]
 	path = lib/libyaml
 	url = https://github.com/yaml/libyaml
 [submodule "lib/ordered-map"]
@@ -12,7 +12,7 @@
 	url = https://github.com/Tessil/ordered-map
 [submodule "lib/zlib-ng"]
 	path = lib/zlib-ng
-	url = https://github.com/zeldamods/zlib-ng
+	url = https://github.com/cobra838/zlib-ng
 [submodule "lib/EasyIterator"]
 	path = lib/EasyIterator
 	url = https://github.com/TheLartians/EasyIterator

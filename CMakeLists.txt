@@ -69,7 +69,8 @@ add_subdirectory(lib/ordered-map)
 add_subdirectory(lib/rapidyaml)
 # Enabling AVX2 would require users to have a recent CPU
 option(WITH_AVX2 "" OFF)
-option(ZLIB_ENABLE_TESTS "" OFF)
+unset(ZLIB_ENABLE_TESTS CACHE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 add_subdirectory(lib/zlib-ng)
 target_link_libraries(oead
   PUBLIC
