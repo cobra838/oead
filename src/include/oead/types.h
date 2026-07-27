@@ -141,6 +141,11 @@ struct NumberType<Number<T>> {
   using type = T;
 };
 
+template <bool BigEndian>
+struct NumberType<U24<BigEndian>> {
+  using type = u32;
+};
+
 /// 2D vector.
 template <typename T>
 struct Vector2 {
