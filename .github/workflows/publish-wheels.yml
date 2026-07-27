@@ -1,0 +1,129 @@
+name: Build oead wheels
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: oead-package-index
+  cancel-in-progress: false
+
+jobs:
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # Universal wheels error on Mac, so use macos-latest for arm.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.14"
+      CIBW_ARCHS: auto64
+      CIBW_BUILD: cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*
+      CIBW_SKIP: "*-musllinux_*"
+      CIBW_BUILD_VERBOSITY: 1
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v4.1.1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  publish:
+    name: Publish package index
+    needs: build_wheels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Create package index
+        env:
+          PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+        run: |
+          python - <<'PY'
+          from hashlib import sha256
+          from html import escape
+          from pathlib import Path
+          import os
+          import re
+          import shutil
+
+          release_dir = Path("release")
+          site = Path("package-index")
+          wheel_dir = site / "wheels"
+          project_dir = site / "simple" / "oead"
+          wheel_dir.mkdir(parents=True)
+          project_dir.mkdir(parents=True)
+          wheels = sorted(release_dir.glob("*.whl"))
+          if not wheels:
+              raise SystemExit("No wheel artifacts were downloaded")
+
+          page_url = os.environ["PAGES_URL"]
+          links = []
+          requirements = []
+          for wheel in wheels:
+              name = wheel.name
+              match = re.search(r"-cp(\d+)-cp\d+t?-(.+)\.whl$", name)
+              if not match:
+                  raise SystemExit(f"Unsupported wheel filename: {name}")
+              tag, platform = match.groups()
+              python_version = f"{tag[0]}.{tag[1:]}"
+              if platform.endswith("win_amd64"):
+                  system, machine = "Windows", "AMD64"
+              elif "macosx" in platform and platform.endswith("arm64"):
+                  system, machine = "Darwin", "arm64"
+              elif "linux" in platform and platform.endswith("x86_64"):
+                  system, machine = "Linux", "x86_64"
+              else:
+                  raise SystemExit(f"Unsupported wheel platform: {platform}")
+
+              destination = wheel_dir / name
+              shutil.copy2(wheel, destination)
+              digest = sha256(destination.read_bytes()).hexdigest()
+              links.append(f'<a href="../../wheels/{escape(name)}#sha256={digest}">{escape(name)}</a>')
+              requirements.append(
+                  f'oead @ {page_url}/wheels/{name} ; python_version == "{python_version}" '
+                  f'and platform_system == "{system}" and platform_machine == "{machine}"'
+              )
+
+          (site / "simple").mkdir(exist_ok=True)
+          (site / "simple" / "index.html").write_text(
+              "<!doctype html><html><body><a href=\"oead/\">oead</a></body></html>\n",
+              encoding="utf-8",
+          )
+          (project_dir / "index.html").write_text(
+              "<!doctype html><html><body>" + "\n".join(links) + "</body></html>\n",
+              encoding="utf-8",
+          )
+          (site / "latest.txt").write_text("\n".join(requirements) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload package index
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: package-index
+
+      - name: Deploy package index
+        uses: actions/deploy-pages@v5
