@@ -83,12 +83,12 @@ public:
                               std::unique_ptr<Dictionary>, bool, S32, F32, U32, S64, U64, F64>;
 
   Byml() = default;
-  Byml(const Byml& other) { *this = other; }
-  Byml(Byml&& other) noexcept { *this = std::move(other); }
-  template <typename T, std::enable_if_t<std::is_constructible_v<Value, T>>* = nullptr>
-  Byml(T value) : m_value{std::move(value)} {}
-  Byml& operator=(const Byml& other) = default;
-  Byml& operator=(Byml&& other) noexcept = default;
+  Byml(const Byml& other);
+  Byml(Byml&& other) noexcept;
+  template <typename T, std::enable_if_t<std::is_constructible_v<Value, T&&>>* = nullptr>
+  Byml(T&& value) : m_value{std::forward<T>(value)} {}
+  Byml& operator=(const Byml& other);
+  Byml& operator=(Byml&& other) noexcept;
 
   OEAD_DEFINE_FIELDS(Byml, m_value);
 
@@ -211,3 +211,9 @@ private:
 };
 
 }  // namespace oead
+
+inline oead::Byml& oead::Byml::operator=(const Byml& other) = default;
+inline oead::Byml& oead::Byml::operator=(Byml&& other) noexcept = default;
+
+inline oead::Byml::Byml(const Byml& other) = default;
+inline oead::Byml::Byml(Byml&& other) noexcept = default;

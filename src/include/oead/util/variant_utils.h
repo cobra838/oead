@@ -21,6 +21,7 @@
 
 #include <nonstd/visit.h>
 #include <type_traits>
+#include <vector>
 
 #include <oead/util/type_utils.h>
 
@@ -32,6 +33,16 @@ struct Overloaded : Ts... {
 };
 template <class... Ts>
 Overloaded(Ts...)->Overloaded<Ts...>;
+
+template <typename T, typename = void>
+struct IsMap : std::false_type {};
+template <typename T>
+struct IsMap<T, std::void_t<typename T::mapped_type>> : std::true_type {};
+
+template <typename T>
+struct IsVector : std::false_type {};
+template <typename T, typename Allocator>
+struct IsVector<std::vector<T, Allocator>> : std::true_type {};
 
 /// Helper function to visit a std::variant efficiently.
 template <typename Visitor, typename... Variants>
@@ -68,20 +79,45 @@ struct Variant {
             std::enable_if_t<IsAnyOfType<std::decay_t<T>, Types...>() ||
                              IsAnyOfType<std::unique_ptr<std::decay_t<T>>, Types...>()>* = nullptr>
   Variant(const T& value) {
-    if constexpr (IsAnyOfType<std::unique_ptr<std::decay_t<T>>, Types...>())
-      v = std::make_unique<T>(value);
-    else
+    if constexpr (IsAnyOfType<std::unique_ptr<std::decay_t<T>>, Types...>()) {
+      using RealT = std::decay_t<T>;
+      if constexpr (IsMap<RealT>::value) {
+        auto ptr = std::make_unique<RealT>();
+        for (const auto& kv : value) {
+          ptr->emplace(kv.first, kv.second);
+        }
+        v = std::move(ptr);
+      } else if constexpr (IsVector<RealT>::value) {
+        auto ptr = std::make_unique<RealT>();
+        ptr->reserve(value.size());
+        for (const auto& item : value) {
+          ptr->emplace_back(item);
+        }
+        v = std::move(ptr);
+      } else {
+        v = std::make_unique<RealT>(value);
+      }
+    } else {
       v = value;
+    }
   }
 
   template <typename T,
             std::enable_if_t<IsAnyOfType<std::decay_t<T>, Types...>() ||
                              IsAnyOfType<std::unique_ptr<std::decay_t<T>>, Types...>()>* = nullptr>
   Variant(T&& value) noexcept {
-    if constexpr (IsAnyOfType<std::unique_ptr<std::decay_t<T>>, Types...>())
-      v = std::make_unique<T>(std::move(value));
-    else
+    if constexpr (IsAnyOfType<std::unique_ptr<std::decay_t<T>>, Types...>()) {
+      using RealT = std::decay_t<T>;
+      if constexpr (IsMap<RealT>::value || IsVector<RealT>::value) {
+        auto ptr = std::make_unique<RealT>();
+        ptr->swap(value);
+        v = std::move(ptr);
+      } else {
+        v = std::make_unique<RealT>(std::move(value));
+      }
+    } else {
       v = std::move(value);
+    }
   }
 
   Variant& operator=(const Variant& other) {
