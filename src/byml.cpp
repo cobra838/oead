@@ -69,7 +69,7 @@ enum class NodeType : u8 {
   PathTable = 0xc3,           // Unsupported
   RemappedDictionary = 0xc4,  // Unsupported
   RelocatedStringTable = 0xc5,
-  MonoTypedArray = 0xc8,  // Unsupported
+  MonoTypedArray = 0xc8,
   Bool = 0xd0,
   Int = 0xd1,
   Float = 0xd2,
@@ -87,13 +87,20 @@ constexpr NodeType GetNodeType(Byml::Type type) {
       NodeType::Array,  NodeType::Dictionary, NodeType::Bool,
       NodeType::Int,    NodeType::Float,      NodeType::UInt,
       NodeType::Int64,  NodeType::UInt64,     NodeType::Double,
+      NodeType::MonoTypedArray,
   };
   return map[u8(type)];
 }
 
 template <typename T = NodeType>
 constexpr bool IsContainerType(T type) {
-  return type == T::Array || type == T::Dictionary || type == T::Hash32 || type == T::Hash64;
+  if constexpr (std::is_same_v<T, NodeType>) {
+    return type == T::Array || type == T::Dictionary || type == T::Hash32 || type == T::Hash64 ||
+           type == T::MonoTypedArray;
+  } else {
+    return type == T::Array || type == T::Dictionary || type == T::Hash32 || type == T::Hash64 ||
+           type == T::MonoTypedArray;
+  }
 }
 
 template <typename T = NodeType>
@@ -299,6 +306,27 @@ private:
     return Byml{std::move(result)};
   }
 
+  Byml ParseMonoTypedArrayNode(u32 offset, u32 size) {
+    const auto element_type = m_reader.Read<NodeType>(offset + 4);
+    if (!element_type)
+      throw InvalidDataError("Invalid monotyped array node");
+    const auto get_byml_type = [](NodeType type) -> Byml::Type {
+      for (size_t i = 0; i <= static_cast<size_t>(Byml::Type::MonoTypedArray); ++i) {
+        const auto byml_type = static_cast<Byml::Type>(i);
+        if (GetNodeType(byml_type) == type)
+          return byml_type;
+      }
+      throw InvalidDataError("Unsupported monotyped array element type");
+    };
+    Byml::MonoTypedArray result{get_byml_type(*element_type)};
+    result.reserve(size);
+    const u32 values_offset = util::AlignUp(offset + 5, 4);
+    for (u32 i = 0; i < size; ++i) {
+      result.emplace_back(ParseContainerChildNode(values_offset + 4 * i, *element_type));
+    }
+    return Byml{std::move(result)};
+  }
+
   Byml ParseDictionaryNode(u32 offset, u32 size) {
     Byml::Dictionary result;
     for (u32 i = 0; i < size; ++i) {
@@ -320,6 +348,8 @@ private:
     switch (*type) {
     case NodeType::Array:
       return ParseArrayNode(offset, *num_entries);
+    case NodeType::MonoTypedArray:
+      return ParseMonoTypedArrayNode(offset, *num_entries);
     case NodeType::Dictionary:
       return ParseDictionaryNode(offset, *num_entries);
     case NodeType::Hash32:
@@ -360,6 +390,10 @@ struct WriteContext {
         break;
       case Byml::Type::Array:
         for (const auto& value : data.GetArray())
+          self(self, value);
+        break;
+      case Byml::Type::MonoTypedArray:
+        for (const auto& value : data.GetMonoTypedArray())
           self(self, value);
         break;
       case Byml::Type::Dictionary:
@@ -450,6 +484,19 @@ struct WriteContext {
       writer.AlignUp(4);
       for (const auto& item : array)
         write_container_item(item);
+      break;
+    }
+    case Byml::Type::MonoTypedArray: {
+      const auto& array = data.GetMonoTypedArray();
+      writer.Write(NodeType::MonoTypedArray);
+      writer.WriteU24(CheckedU24(array.size()));
+      writer.Write(GetNodeType(array.element_type));
+      writer.AlignUp(4);
+      for (const auto& item : array) {
+        if (item.GetType() != array.element_type)
+          throw std::invalid_argument("MonoTypedArray contains values with different types");
+        write_container_item(item);
+      }
       break;
     }
     case Byml::Type::Dictionary: {
@@ -629,6 +676,10 @@ Byml::Array& Byml::GetArray() {
   return Get<Type::Array>();
 }
 
+Byml::MonoTypedArray& Byml::GetMonoTypedArray() {
+  return Get<Type::MonoTypedArray>();
+}
+
 Byml::String& Byml::GetString() {
   return Get<Type::String>();
 }
@@ -655,6 +706,10 @@ const Byml::Dictionary& Byml::GetDictionary() const {
 
 const Byml::Array& Byml::GetArray() const {
   return Get<Type::Array>();
+}
+
+const Byml::MonoTypedArray& Byml::GetMonoTypedArray() const {
+  return Get<Type::MonoTypedArray>();
 }
 
 const Byml::String& Byml::GetString() const {

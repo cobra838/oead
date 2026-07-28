@@ -31,6 +31,7 @@
 #include "main.h"
 
 OEAD_MAKE_OPAQUE("Array", oead::Byml::Array);
+OEAD_MAKE_OPAQUE("MonoTypedArray", oead::Byml::MonoTypedArray);
 OEAD_MAKE_OPAQUE("Dictionary", oead::Byml::Dictionary);
 OEAD_MAKE_OPAQUE("Hash32", oead::Byml::Hash32);
 OEAD_MAKE_OPAQUE("Hash64", oead::Byml::Hash64);
@@ -47,6 +48,11 @@ struct type_caster<oead::Byml> {
   }
 
   bool load(handle src, bool convert) {
+    if (py::isinstance<oead::Byml::MonoTypedArray>(src)) {
+      value = oead::Byml{src.cast<oead::Byml::MonoTypedArray>()};
+      return true;
+    }
+
     value_conv inner_caster;
     if (!inner_caster.load(src, convert))
       return false;
@@ -60,8 +66,8 @@ struct type_caster<oead::Byml> {
 
 namespace oead::bind {
 /// Wraps a callable to avoid expensive conversions to Byml; instead, we detect
-/// whether the first parameter is a Byml::Array, Byml::Dictionary, Byml::Hash32, or Byml::hash64
-/// and if so we borrow the value and move-construct a temporary Byml in order to avoid copies.
+/// whether the first parameter is a BYML container and if so we borrow the value and
+/// move-construct a temporary Byml in order to avoid copies.
 template <typename... Ts, typename Callable>
 static auto BorrowByml(Callable&& callable) {
   return [&, callable](py::handle handle, Ts&&... args) {
@@ -70,6 +76,11 @@ static auto BorrowByml(Callable&& callable) {
       obj = std::move(value);
       return std::invoke(callable, obj, std::forward<Ts>(args)...);
     };
+    if (py::isinstance<Byml::MonoTypedArray>(handle)) {
+      auto& ref = handle.cast<Byml::MonoTypedArray&>();
+      util::ScopeGuard guard{[&] { ref = std::move(obj.Get<Byml::Type::MonoTypedArray>()); }};
+      return invoke(std::move(ref));
+    }
     if (py::isinstance<Byml::Array>(handle)) {
       auto& ref = handle.cast<Byml::Array&>();
       util::ScopeGuard guard{[&] { ref = std::move(obj.Get<Byml::Type::Array>()); }};
@@ -114,6 +125,8 @@ void BindByml(py::module& parent) {
   m.def("get_uint64", BorrowByml(&Byml::GetUInt64), "data"_a);
 
   BindVector<Byml::Array>(m, "Array");
+  py::class_<Byml::MonoTypedArray, Byml::Array, std::unique_ptr<Byml::MonoTypedArray>>(
+      m, "MonoTypedArray");
   BindMap<Byml::Dictionary>(m, "Dictionary");
   // Keep oead.byml.Hash as a compatibility alias for Dictionary.
   m.attr("Hash") = m.attr("Dictionary");

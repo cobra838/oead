@@ -47,6 +47,8 @@ struct BinaryAligned {
 /// BYML value class. This represents a generic value (array, dict, bool, float, u32, etc.)
 class Byml {
 public:
+  struct MonoTypedArray;
+
   enum class Type {
     Null = 0,
     Hash32,
@@ -64,6 +66,7 @@ public:
     Int64,
     UInt64,
     Double,
+    MonoTypedArray,
   };
 
   using Null = std::nullptr_t;
@@ -80,7 +83,8 @@ public:
   using Value = util::Variant<Type, Null, std::unique_ptr<Hash32>, std::unique_ptr<Hash64>,
                               std::unique_ptr<String>, std::unique_ptr<std::vector<u8>>,
                               std::unique_ptr<BinaryWithAlignment>, std::unique_ptr<Array>,
-                              std::unique_ptr<Dictionary>, bool, S32, F32, U32, S64, U64, F64>;
+                              std::unique_ptr<Dictionary>, bool, S32, F32, U32, S64, U64, F64,
+                              std::unique_ptr<MonoTypedArray>>;
 
   template <typename T, typename = void>
   struct is_byml_constructible : std::false_type {};
@@ -194,6 +198,7 @@ public:
   Dictionary& GetDictionary();
   Hash& GetHash() { return GetDictionary(); }
   Array& GetArray();
+  MonoTypedArray& GetMonoTypedArray();
   String& GetString();
   std::vector<u8>& GetBinary();
   BinaryWithAlignment& GetBinaryWithAlignment();
@@ -202,6 +207,7 @@ public:
   const Dictionary& GetDictionary() const;
   const Hash& GetHash() const { return GetDictionary(); }
   const Array& GetArray() const;
+  const MonoTypedArray& GetMonoTypedArray() const;
   const String& GetString() const;
   const std::vector<u8>& GetBinary() const;
   const BinaryWithAlignment& GetBinaryWithAlignment() const;
@@ -215,6 +221,28 @@ public:
 
 private:
   Value m_value;
+};
+
+/// A BYML MonoTypedArray. All elements must have the specified BYML type.
+struct Byml::MonoTypedArray : Array {
+  explicit MonoTypedArray(Type element_type = Type::Null) : element_type(element_type) {}
+  MonoTypedArray(Type element_type, Array values)
+      : Array(std::move(values)), element_type(element_type) {}
+
+  Type element_type;
+
+  auto fields() { return std::tie(static_cast<Array&>(*this), element_type); }
+  auto fields() const { return std::tie(static_cast<const Array&>(*this), element_type); }
+  friend bool operator==(const MonoTypedArray& lhs, const MonoTypedArray& rhs) {
+    return lhs.fields() == rhs.fields();
+  }
+  friend bool operator!=(const MonoTypedArray& lhs, const MonoTypedArray& rhs) {
+    return !(lhs == rhs);
+  }
+  template <typename H>
+  friend H AbslHashValue(H h, const MonoTypedArray& self) {
+    return H::combine(std::move(h), self.fields());
+  }
 };
 
 }  // namespace oead

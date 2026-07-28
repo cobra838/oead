@@ -78,13 +78,20 @@ static Byml ScalarToValue(std::string_view tag, yml::Scalar&& scalar) {
 
 static bool ShouldUseInlineYamlStyle(const Byml& container) {
   const auto is_simple = [](const Byml& item) {
-    return !util::IsAnyOf(item.GetType(), Byml::Type::Array, Byml::Type::Dictionary,
-                          Byml::Type::Hash32, Byml::Type::Hash64);
+    return !util::IsAnyOf(item.GetType(), Byml::Type::Array, Byml::Type::MonoTypedArray,
+                          Byml::Type::Dictionary, Byml::Type::Hash32, Byml::Type::Hash64);
   };
   switch (container.GetType()) {
   case Byml::Type::Array: {
     if (container.GetArray().size() > 10) return false;
     for (const auto& item : container.GetArray()) {
+      if (!is_simple(item)) return false;
+    }
+    return true;
+  }
+  case Byml::Type::MonoTypedArray: {
+    if (container.GetMonoTypedArray().size() > 10) return false;
+    for (const auto& item : container.GetMonoTypedArray()) {
       if (!is_simple(item)) return false;
     }
     return true;
@@ -222,6 +229,21 @@ std::string Byml::ToText() const {
     }
     case Byml::Type::Array: {
       const auto& v = node.GetArray();
+      yaml_event_t event;
+      const auto style = byml::ShouldUseInlineYamlStyle(node) ? YAML_FLOW_SEQUENCE_STYLE :
+                                                                YAML_BLOCK_SEQUENCE_STYLE;
+      yaml_sequence_start_event_initialize(&event, nullptr, nullptr, 1, style);
+      emitter.Emit(event);
+
+      for (const Byml& item : v)
+        self(self, item);
+
+      yaml_sequence_end_event_initialize(&event);
+      emitter.Emit(event);
+      break;
+    }
+    case Byml::Type::MonoTypedArray: {
+      const auto& v = node.GetMonoTypedArray();
       yaml_event_t event;
       const auto style = byml::ShouldUseInlineYamlStyle(node) ? YAML_FLOW_SEQUENCE_STYLE :
                                                                 YAML_BLOCK_SEQUENCE_STYLE;

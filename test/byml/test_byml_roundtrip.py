@@ -11,6 +11,34 @@ def test_byml_hash_alias():
     assert oead.byml.Hash is oead.byml.Dictionary
 
 
+def test_byml_nested_containers_are_mutable():
+    data = oead.byml.Dictionary(
+        {
+            "array": oead.byml.Array([oead.S32(1)]),
+            "dictionary": oead.byml.Dictionary({"value": oead.S32(1)}),
+        }
+    )
+
+    data["array"].append(oead.S32(2))
+    data["dictionary"]["value"] = oead.S32(2)
+
+    assert len(data["array"]) == 2
+    assert data["dictionary"]["value"] == oead.S32(2)
+
+
+def test_byml_roundtrip_mono_typed_array():
+    # Little-endian BYML v10 containing a MonoTypedArray of two Int values: 42 and -5.
+    data = bytes.fromhex(
+        "59420a00000000000000000010000000"
+        "c8020000d10000002a000000fbffffff"
+    )
+
+    array = oead.byml.from_binary(data)
+    assert isinstance(array, oead.byml.Array)
+    assert [int(value) for value in array] == [42, -5]
+    assert oead.byml.to_binary(array, big_endian=False, version=10) == data
+
+
 @pytest.mark.parametrize("file", cases_bin)
 def test_byml_roundtrip_bin(file):
     data = oead.byml.from_binary(data_bin[file])
