@@ -115,6 +115,8 @@ void BindByml(py::module& parent) {
 
   BindVector<Byml::Array>(m, "Array");
   BindMap<Byml::Dictionary>(m, "Dictionary");
+  // Keep oead.byml.Hash as a compatibility alias for Dictionary.
+  m.attr("Hash") = m.attr("Dictionary");
   BindMap<Byml::Hash32>(m, "Hash32");
   BindMap<Byml::Hash64>(m, "Hash64");
 

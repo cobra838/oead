@@ -6,6 +6,10 @@ from utils import make_test_cases
 cases_bin, data_bin = make_test_cases("byml/files/*.byml")
 cases_text, data_text = make_test_cases("byml/files/*.yml")
 
+# Check new Dictionary = old Hash
+def test_byml_hash_alias():
+    assert oead.byml.Hash is oead.byml.Dictionary
+
 
 @pytest.mark.parametrize("file", cases_bin)
 def test_byml_roundtrip_bin(file):

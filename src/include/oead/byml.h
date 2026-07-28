@@ -56,6 +56,7 @@ public:
     BinaryWithAlignment,
     Array,
     Dictionary,
+    Hash = Dictionary,  // Legacy C++ enum value for string-keyed dictionaries.
     Bool,
     Int,
     Float,
@@ -71,6 +72,8 @@ public:
   using String = std::string;
   using Array = std::vector<Byml>;
   using Dictionary = absl::btree_map<std::string, Byml>;
+  // Legacy C++ enum value for string-keyed dictionaries.
+  using Hash = Dictionary;
 
   using BinaryWithAlignment = BinaryAligned;
 
@@ -182,6 +185,7 @@ public:
   Hash32& GetHash32();
   Hash64& GetHash64();
   Dictionary& GetDictionary();
+  Hash& GetHash() { return GetDictionary(); }
   Array& GetArray();
   String& GetString();
   std::vector<u8>& GetBinary();
@@ -189,6 +193,7 @@ public:
   const Hash32& GetHash32() const;
   const Hash64& GetHash64() const;
   const Dictionary& GetDictionary() const;
+  const Hash& GetHash() const { return GetDictionary(); }
   const Array& GetArray() const;
   const String& GetString() const;
   const std::vector<u8>& GetBinary() const;
