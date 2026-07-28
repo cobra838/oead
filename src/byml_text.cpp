@@ -217,9 +217,9 @@ std::string Byml::ToText() const {
                                                                  YAML_BLOCK_MAPPING_STYLE;
           yml::LibyamlEmitter::MappingScope scope{emitter, {}, style};
 
-          for (const auto& [k, v] : v) {
+          for (const auto& [k, value] : v) {
             emitter.EmitString(k);
-            self(self, v);
+            self(self, value);
           }
         },
         [&](const Hash32& v) {
@@ -227,9 +227,9 @@ std::string Byml::ToText() const {
                                                                  YAML_BLOCK_MAPPING_STYLE;
           yml::LibyamlEmitter::MappingScope scope{emitter, "!h32", style};
 
-          for (const auto& [k, v] : v) {
+          for (const auto& [k, value] : v) {
             emitter.EmitString(absl::StrFormat("0x%08x", k));
-            self(self, v);
+            self(self, value);
           }
         },
         [&](const Hash64& v) {
@@ -237,9 +237,9 @@ std::string Byml::ToText() const {
                                                                  YAML_BLOCK_MAPPING_STYLE;
           yml::LibyamlEmitter::MappingScope scope{emitter, "!h64", style};
 
-          for (const auto& [k, v] : v) {
+          for (const auto& [k, value] : v) {
             emitter.EmitString(absl::StrFormat("0x%016x", k));
-            self(self, v);
+            self(self, value);
           }
         },
         [&](bool v) { emitter.EmitBool(v); },  //

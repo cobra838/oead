@@ -21,8 +21,10 @@
 
 #include <array>
 #include <cstring>
+#include <limits>
 #include <nonstd/span.h>
 #include <optional>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 
@@ -52,7 +54,7 @@ public:
       Seek(*offset);
     static_assert(std::is_standard_layout<T>());
     if constexpr (Safe) {
-      if (m_offset + sizeof(T) > m_data.size())
+      if (m_offset > m_data.size() || sizeof(T) > m_data.size() - m_offset)
         return std::nullopt;
     }
     T value = util::BitCastPtr<T>(&m_data[m_offset]);
@@ -66,7 +68,7 @@ public:
     if (read_offset)
       Seek(*read_offset);
     if constexpr (Safe) {
-      if (m_offset + 3 > m_data.size())
+      if (m_offset > m_data.size() || 3 > m_data.size() - m_offset)
         return std::nullopt;
     }
     const size_t offset = m_offset;
@@ -98,13 +100,15 @@ private:
 template <typename T>
 inline void RelocateWithSize(tcb::span<u8> buffer, T*& ptr, size_t size) {
   const u64 offset = reinterpret_cast<u64>(ptr);
-  if (buffer.size() < offset || buffer.size() < offset + size)
+  if (offset > buffer.size() || size > buffer.size() - offset)
     throw std::out_of_range("RelocateWithSize: out of bounds");
   ptr = reinterpret_cast<T*>(buffer.data() + offset);
 }
 
 template <typename T>
 inline void Relocate(tcb::span<u8> buffer, T*& ptr, size_t num_objects = 1) {
+  if (num_objects > std::numeric_limits<size_t>::max() / sizeof(T))
+    throw std::out_of_range("Relocate: size overflow");
   RelocateWithSize(buffer, ptr, sizeof(T) * num_objects);
 }
 
@@ -136,11 +140,14 @@ public:
   BinaryReader Reader() const { return {m_data, m_endian}; }
 
   void WriteBytes(tcb::span<const u8> bytes) {
-    if (m_offset + bytes.size() > m_data.size())
-      m_data.resize(m_offset + bytes.size());
+    if (bytes.size() > std::numeric_limits<size_t>::max() - m_offset)
+      throw std::length_error("Binary writer size overflow");
+    const size_t end_offset = m_offset + bytes.size();
+    if (end_offset > m_data.size())
+      m_data.resize(end_offset);
 
     std::memcpy(&m_data[m_offset], bytes.data(), bytes.size());
-    m_offset += bytes.size();
+    m_offset = end_offset;
   }
 
   template <typename T, typename std::enable_if_t<!std::is_pointer_v<T> &&
@@ -177,7 +184,11 @@ public:
 
   template <typename T>
   void WriteCurrentOffsetAt(size_t offset, size_t base = 0) {
-    RunAt(offset, [this, base](size_t current_offset) { Write(T(current_offset - base)); });
+    RunAt(offset, [this, base](size_t current_offset) {
+      if (current_offset < base)
+        throw std::logic_error("Invalid relative offset");
+      Write(T(current_offset - base));
+    });
   }
 
   void AlignUp(size_t n) { Seek(util::AlignUp(Tell(), n)); }

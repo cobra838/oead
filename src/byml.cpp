@@ -22,7 +22,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <map>
+#include <stdexcept>
 #include <string_view>
 
 #include <oead/byml.h>
@@ -109,6 +111,18 @@ constexpr bool IsValidVersion(int version) {
   return 1 <= version && version <= 10;
 }
 
+u32 CheckedU24(size_t value) {
+  if (value > 0x00ffffff)
+    throw std::invalid_argument("BYML value exceeds the 24-bit limit");
+  return static_cast<u32>(value);
+}
+
+u32 CheckedU32(size_t value) {
+  if (value > std::numeric_limits<u32>::max())
+    throw std::invalid_argument("BYML value exceeds the 32-bit limit");
+  return static_cast<u32>(value);
+}
+
 class StringTableParser {
 public:
   StringTableParser() = default;
@@ -124,7 +138,9 @@ public:
       m_offset = offset;
     } else {
       const auto reloc = reader.Read<u64>();
-      m_offset = offset + *reloc;
+      if (*reloc > std::numeric_limits<size_t>::max() - offset)
+        throw InvalidDataError("Invalid relocated string table offset");
+      m_offset = offset + static_cast<size_t>(*reloc);
     }
     m_size = *num_entries;
   }
@@ -146,7 +162,7 @@ public:
   }
 
 private:
-  u32 m_offset = 0;
+  size_t m_offset = 0;
   u32 m_size = 0;
 };
 
@@ -379,12 +395,12 @@ struct WriteContext {
     case Byml::Type::String:
       return writer.Write<u32>(string_table.GetIndex(data.GetString()));
     case Byml::Type::Binary:
-      writer.Write(static_cast<u32>(data.GetBinary().size()));
+      writer.Write(CheckedU32(data.GetBinary().size()));
       writer.WriteBytes(data.GetBinary());
       return;
     case Byml::Type::BinaryWithAlignment:
       writer.Seek(util::AlignUp(writer.Tell() + 8, data.GetBinaryWithAlignment().align) - 8);
-      writer.Write(static_cast<u32>(data.GetBinaryWithAlignment().data.size()));
+      writer.Write(CheckedU32(data.GetBinaryWithAlignment().data.size()));
       writer.Write(data.GetBinaryWithAlignment().align);
       writer.WriteBytes(data.GetBinaryWithAlignment().data);
       return;
@@ -428,7 +444,7 @@ struct WriteContext {
     case Byml::Type::Array: {
       const auto& array = data.GetArray();
       writer.Write(NodeType::Array);
-      writer.WriteU24(array.size());
+      writer.WriteU24(CheckedU24(array.size()));
       for (const auto& item : array)
         writer.Write(GetNodeType(item.GetType()));
       writer.AlignUp(4);
@@ -439,7 +455,7 @@ struct WriteContext {
     case Byml::Type::Dictionary: {
       const auto& dict = data.GetDictionary();
       writer.Write(NodeType::Dictionary);
-      writer.WriteU24(dict.size());
+      writer.WriteU24(CheckedU24(dict.size()));
       for (const auto& [key, value] : dict) {
         const auto type = GetNodeType(value.GetType());
         writer.WriteU24(hash_key_table.GetIndex(key));
@@ -451,7 +467,7 @@ struct WriteContext {
     case Byml::Type::Hash32: {
       const auto& hash = data.GetHash32();
       writer.Write(NodeType::Hash32);
-      writer.WriteU24(hash.size());
+      writer.WriteU24(CheckedU24(hash.size()));
       for (const auto& [key, value] : hash) {
         writer.Write(key);
         write_container_item(value);
@@ -465,7 +481,7 @@ struct WriteContext {
     case Byml::Type::Hash64: {
       const auto& hash = data.GetHash64();
       writer.Write(NodeType::Hash64);
-      writer.WriteU24(hash.size());
+      writer.WriteU24(CheckedU24(hash.size()));
       for (const auto& [key, value] : hash) {
         writer.Write(key);
         write_container_item(value);
@@ -495,8 +511,9 @@ struct WriteContext {
             type != Byml::Type::BinaryWithAlignment ?
                 writer.Tell() :
                 util::AlignUp(writer.Tell() + 8, node.data->GetBinaryWithAlignment().align) - 8;
-        writer.RunAt(node.offset_in_container, [&](size_t) { writer.Write<u32>(offset); });
-        non_inline_node_data.emplace(*node.data, offset);
+        const u32 offset_u32 = CheckedU32(offset);
+        writer.RunAt(node.offset_in_container, [&](size_t) { writer.Write(offset_u32); });
+        non_inline_node_data.emplace(*node.data, offset_u32);
         if (IsContainerType(type))
           WriteContainerNode(*node.data);
         else
@@ -515,7 +532,7 @@ struct WriteContext {
     void Build() {
       sorted_strings = SortMapKeys<std::string_view>(map);
       for (const auto& [i, key] : util::Enumerate(sorted_strings))
-        map[key] = i;
+        map[key] = CheckedU32(i);
     }
 
     // We use a hash map here to get fast insertions and fast lookups in hot paths,
@@ -527,19 +544,27 @@ struct WriteContext {
   void WriteStringTable(const StringTable& table) {
     const size_t base = writer.Tell();
     writer.Write(NodeType::StringTable);
-    writer.WriteU24(table.Size());
+    writer.WriteU24(CheckedU24(table.Size()));
 
     // String offsets.
     const size_t offset_table_offset = writer.Tell();
     writer.Seek(writer.Tell() + sizeof(u32) * (table.Size() + 1));
 
     for (const auto& [i, string] : util::Enumerate(table.sorted_strings)) {
-      writer.WriteCurrentOffsetAt<u32>(offset_table_offset + sizeof(u32) * i, base);
+      WriteCurrentOffsetAtU32(offset_table_offset + sizeof(u32) * i, base);
       writer.WriteCStr(string);
     }
 
-    writer.WriteCurrentOffsetAt<u32>(offset_table_offset + sizeof(u32) * table.Size(), base);
+    WriteCurrentOffsetAtU32(offset_table_offset + sizeof(u32) * table.Size(), base);
     writer.AlignUp(4);
+  }
+
+  void WriteCurrentOffsetAtU32(size_t offset, size_t base = 0) {
+    writer.RunAt(offset, [this, base](size_t current_offset) {
+      if (current_offset < base)
+        throw std::logic_error("Invalid relative BYML offset");
+      writer.Write(CheckedU32(current_offset - base));
+    });
   }
 
   util::BinaryWriter writer;
@@ -572,16 +597,16 @@ std::vector<u8> Byml::ToBinary(bool big_endian, int version) const {
     return ctx.writer.Finalize();
 
   if (ctx.hash_key_table) {
-    ctx.writer.WriteCurrentOffsetAt<u32>(offsetof(byml::ResHeader, hash_key_table_offset));
+    ctx.WriteCurrentOffsetAtU32(offsetof(byml::ResHeader, hash_key_table_offset));
     ctx.WriteStringTable(ctx.hash_key_table);
   }
 
   if (ctx.string_table) {
-    ctx.writer.WriteCurrentOffsetAt<u32>(offsetof(byml::ResHeader, string_table_offset));
+    ctx.WriteCurrentOffsetAtU32(offsetof(byml::ResHeader, string_table_offset));
     ctx.WriteStringTable(ctx.string_table);
   }
 
-  ctx.writer.WriteCurrentOffsetAt<u32>(offsetof(byml::ResHeader, root_node_offset));
+  ctx.WriteCurrentOffsetAtU32(offsetof(byml::ResHeader, root_node_offset));
   ctx.writer.AlignUp(4);
   ctx.WriteContainerNode(*this);
   ctx.writer.AlignUp(4);

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <bitset>
 #include <cstring>
+#include <limits>
 
 #include <zlib-ng.h>
 
@@ -104,13 +105,16 @@ private:
 }  // namespace
 
 std::vector<u8> Compress(tcb::span<const u8> src, u32 data_alignment, int level) {
+  if (src.size() > std::numeric_limits<u32>::max())
+    throw std::invalid_argument("Yaz0 input is too large");
+
   util::BinaryWriter writer{util::Endianness::Big};
   writer.Buffer().reserve(src.size());
 
   // Write the header.
   Header header;
   header.magic = Magic;
-  header.uncompressed_size = u32(src.size());
+  header.uncompressed_size = static_cast<u32>(src.size());
   header.data_alignment = data_alignment;
   header.reserved.fill(0);
   writer.Write(header);

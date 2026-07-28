@@ -23,6 +23,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -113,6 +114,8 @@ private:
   }
 
   constexpr void Set(u32 v) {
+    if (v > 0x00ffffff)
+      throw std::invalid_argument("U24 value is not representable");
     if constexpr (BigEndian) {
       data[0] = (v >> 16) & 0xFF;
       data[1] = (v >> 8) & 0xFF;

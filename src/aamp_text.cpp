@@ -21,6 +21,8 @@
 #include <absl/strings/match.h>
 #include <absl/strings/str_format.h>
 #include <array>
+#include <limits>
+#include <stdexcept>
 #include <tuple>
 
 #include <c4/std/string.hpp>
@@ -350,12 +352,15 @@ private:
       BuildExtraNameTable(sub_list);
   }
 
-  void EmitName(Name name, int index, Name parent_name) {
+  void EmitName(Name name, size_t index, Name parent_name) {
+    if (index > std::numeric_limits<int>::max())
+      throw std::invalid_argument("AAMP name index is not representable");
+    const int name_index = static_cast<int>(index);
     NameTable& table = GetDefaultNameTable();
-    if (const auto name_str = m_extra_name_table.GetName(name, index, parent_name))
+    if (const auto name_str = m_extra_name_table.GetName(name, name_index, parent_name))
       emitter.EmitString(*name_str);
-    else if (const auto name_str = table.GetName(name, index, parent_name))
-      emitter.EmitString(*name_str);
+    else if (const auto default_name_str = table.GetName(name, name_index, parent_name))
+      emitter.EmitString(*default_name_str);
     else
       emitter.EmitInt(name);
   }

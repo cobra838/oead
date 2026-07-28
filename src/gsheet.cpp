@@ -20,6 +20,8 @@
 #include <absl/strings/str_format.h>
 #include <algorithm>
 #include <any>
+#include <limits>
+#include <stdexcept>
 
 #include <oead/errors.h>
 #include <oead/gsheet.h>
@@ -36,10 +38,18 @@ FieldMap MakeFieldMap(tcb::span<ResField> fields) {
 }
 
 namespace {
+template <typename T>
+T CheckedInteger(size_t value) {
+  if (value > std::numeric_limits<T>::max())
+    throw std::invalid_argument("gsheet value is not representable");
+  return static_cast<T>(value);
+}
+
 struct OpaqueArray {
   auto Items(size_t item_size) const {
     return easy_iterator::MakeIterable<OpaqueIterator>(
-        data, reinterpret_cast<void*>((uintptr_t)data + item_size * size), item_size);
+        data, reinterpret_cast<void*>((uintptr_t)data + item_size * static_cast<size_t>(size)),
+        item_size);
   }
 
   void* data = nullptr;
@@ -58,7 +68,7 @@ u32 GetValueSize(const SheetRw& sheet) {
 }
 
 u32 GetNumFields(const SheetRw& sheet) {
-  u32 count = 0;
+  size_t count = 0;
   const auto traverse = [&count](auto self, const Field& field) -> void {
     ++count;
     for (const auto& subfield : field.fields)
@@ -66,7 +76,7 @@ u32 GetNumFields(const SheetRw& sheet) {
   };
   for (const auto& field : sheet.root_fields)
     traverse(traverse, field);
-  return count;
+  return CheckedInteger<u32>(count);
 }
 
 struct Writer {
@@ -75,9 +85,9 @@ struct Writer {
     ResHeader header{};
     header.alignment = sheet.alignment;
     header.hash = sheet.hash;
-    header.num_root_fields = u32(sheet.root_fields.size());
+    header.num_root_fields = CheckedInteger<u32>(sheet.root_fields.size());
     header.num_fields = GetNumFields(sheet);
-    header.num_values = u32(sheet.values.size());
+    header.num_values = CheckedInteger<u32>(sheet.values.size());
     header.value_size = GetValueSize(sheet);
     writer.Write(header);
     field_strings.push_back({offsetof(ResHeader, name), sheet.name});
@@ -124,7 +134,7 @@ private:
     res.offset_in_value = field.offset_in_value;
     res.inline_size = field.inline_size;
     res.data_size = field.data_size;
-    res.num_fields = u16(field.fields.size());
+    res.num_fields = CheckedInteger<u16>(field.fields.size());
     res.parent = (ResField*)0xdeadbeefdeadbeef;
     writer.Write(res);
     field_strings.push_back({offset + offsetof(ResField, name), field.name});
@@ -180,7 +190,7 @@ private:
       RegisterAndWriteObjectPtr(string, "string ptr");
     else
       writer.Write<u64>(0);
-    writer.Write(u32(string.size()));
+    writer.Write(CheckedInteger<u32>(string.size()));
     writer.Write<u32>(0);
   }
 
@@ -192,7 +202,7 @@ private:
       // Arrays.
       if (field.flags[Field::Flag::IsArray]) {
         RegisterAndWriteObjectPtr(data, "struct: array");
-        writer.Write(u32(data.VisitArray([](const auto& v) { return v.size(); })));
+        writer.Write(CheckedInteger<u32>(data.VisitArray([](const auto& v) { return v.size(); })));
         writer.Write<u32>(0);
       }
       // Strings (including Nullables that are strings).
@@ -340,13 +350,13 @@ private:
   util::BinaryWriter writer{util::Endianness::Little};
 
   /// List of field-related strings and their corresponding offsets.
-  std::vector<std::pair<u32, std::string_view>> field_strings;
+  std::vector<std::pair<size_t, std::string_view>> field_strings;
 
   struct ObjectEntry {
     /// Offset of the pointer that is to point to the object.
-    u32 ptr_offset = 0;
+    size_t ptr_offset = 0;
     /// Offset of the object itself.
-    u32 obj_offset = 0;
+    size_t obj_offset = 0;
 #ifdef OEAD_GSHEET_DEBUG
     std::any object;
     const char* description = nullptr;
@@ -390,7 +400,8 @@ void RelocateFieldData(void* data, const ResField& field, tcb::span<u8> buffer,
   if (field.flags[Field::Flag::IsArray] && !ignore_array_flag) {
     auto* array = static_cast<OpaqueArray*>(data);
 
-    util::RelocateWithSize(buffer, array->data, field.data_size * array->size);
+    util::RelocateWithSize(buffer, array->data,
+                           static_cast<size_t>(field.data_size) * array->size);
     for (void* item : array->Items(field.data_size))
       RelocateFieldData(item, field, buffer, true, ignore_nullable_flag);
   }
@@ -444,7 +455,8 @@ Sheet::Sheet(tcb::span<u8> data) : m_data{data} {
   // Relocate all pointers.
 
   util::Relocate(data, header.name);
-  util::RelocateWithSize(data, header.values, header.num_values * header.value_size);
+  util::RelocateWithSize(data, header.values,
+                         static_cast<size_t>(header.num_values) * header.value_size);
 
   if (data.data() + data.size() < (u8*)&GetAllFieldsRaw()[header.num_fields])
     throw std::out_of_range("Fields are out of bounds");

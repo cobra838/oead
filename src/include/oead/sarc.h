@@ -90,10 +90,10 @@ public:
 
 private:
   u16 m_num_files;
-  u16 m_entries_offset;
+  size_t m_entries_offset;
   u32 m_hash_multiplier;
   u32 m_data_offset;
-  u32 m_names_offset;
+  size_t m_names_offset;
   mutable util::BinaryReader m_reader;
 };
 

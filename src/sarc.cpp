@@ -21,6 +21,7 @@
 #include <absl/container/flat_hash_set.h>
 #include <absl/strings/numbers.h>
 #include <array>
+#include <limits>
 #include <numeric>
 
 #include <cmrc/cmrc.hpp>
@@ -42,6 +43,7 @@ namespace sarc {
 constexpr auto SarcMagic = util::MakeMagic("SARC");
 constexpr auto SfatMagic = util::MakeMagic("SFAT");
 constexpr auto SfntMagic = util::MakeMagic("SFNT");
+constexpr u16 MaxNumFiles = 0x3fff;
 
 struct ResHeader {
   std::array<char, 4> magic;
@@ -90,6 +92,19 @@ constexpr u32 HashName(u32 multiplier, std::string_view name) {
   return hash;
 }
 
+template <typename T>
+T CheckedInteger(size_t value) {
+  if (value > std::numeric_limits<T>::max())
+    throw std::invalid_argument("SARC value is not representable");
+  return static_cast<T>(value);
+}
+
+u32 MakeNameOffset(size_t offset) {
+  if (offset % 4 != 0 || offset / 4 > 0x00ffffff)
+    throw std::invalid_argument("SARC name table is too large");
+  return (1u << 24) | static_cast<u32>(offset / 4);
+}
+
 }  // namespace sarc
 
 // Note: This mirrors what sead::SharcArchiveRes::prepareArchive_ does.
@@ -109,7 +124,7 @@ Sarc::Sarc(tcb::span<const u8> data) : m_reader{data, util::Endianness::Big} {
     throw InvalidDataError("Invalid SFAT magic");
   if (fat_header.header_size != sizeof(sarc::ResFatHeader))
     throw InvalidDataError("Invalid SFAT header size");
-  if (fat_header.num_files >> 0xE)
+  if (fat_header.num_files > sarc::MaxNumFiles)
     throw InvalidDataError("Too many files");
 
   m_num_files = fat_header.num_files;
@@ -191,7 +206,7 @@ size_t Sarc::GuessMinAlignment() const {
   static constexpr size_t MinAlignment = 4;
   size_t gcd = MinAlignment;
   for (size_t i = 0; i < m_num_files; ++i) {
-    const u32 entry_offset = m_entries_offset + sizeof(sarc::ResFatEntry) * i;
+    const size_t entry_offset = m_entries_offset + sizeof(sarc::ResFatEntry) * i;
     const u32 data_begin = m_reader.Read<sarc::ResFatEntry>(entry_offset).value().data_begin;
     gcd = std::gcd(gcd, m_data_offset + data_begin);
   }
@@ -205,22 +220,22 @@ size_t Sarc::GuessMinAlignment() const {
 
 static auto& GetBotwFactoryNames() {
   static auto names = [] {
-    absl::flat_hash_set<std::string_view> names;
+    absl::flat_hash_set<std::string_view> factory_names;
     const auto fs = cmrc::oead::res::get_filesystem();
     const auto info_tsv_file = fs.open("data/botw_resource_factory_info.tsv");
     util::SplitStringByLine({info_tsv_file.begin(), info_tsv_file.size()},
-                            [&names](std::string_view line) {
+                            [&factory_names](std::string_view line) {
                               const auto tab_pos = line.find('\t');
-                              names.emplace(line.substr(0, tab_pos));
+                              factory_names.emplace(line.substr(0, tab_pos));
                             });
-    return names;
+    return factory_names;
   }();
   return names;
 }
 
 static const auto& GetAglEnvAlignmentRequirements() {
   static auto requirements = [] {
-    std::vector<std::pair<std::string, u32>> requirements;
+    std::vector<std::pair<std::string, u32>> alignment_requirements;
 
     const auto fs = cmrc::oead::res::get_filesystem();
     const auto info_tsv_file = fs.open("data/aglenv_file_info.json");
@@ -232,13 +247,13 @@ static const auto& GetAglEnvAlignmentRequirements() {
     for (ryml::ConstNodeRef entry : tree.rootref()) {
       int alignment = 1;
       if (absl::SimpleAtoi(yml::RymlSubstrToStrView(entry["align"].val()), &alignment)) {
-        requirements.emplace_back(std::string(yml::RymlSubstrToStrView(entry["ext"].val())),
-                                  std::abs(alignment));
-        requirements.emplace_back(std::string(yml::RymlSubstrToStrView(entry["bext"].val())),
-                                  std::abs(alignment));
+        alignment_requirements.emplace_back(
+            std::string(yml::RymlSubstrToStrView(entry["ext"].val())), std::abs(alignment));
+        alignment_requirements.emplace_back(
+            std::string(yml::RymlSubstrToStrView(entry["bext"].val())), std::abs(alignment));
       }
     }
-    return requirements;
+    return alignment_requirements;
   }();
   return requirements;
 }
@@ -287,7 +302,9 @@ std::pair<u32, std::vector<u8>> SarcWriter::Write() {
   sarc::ResFatHeader fat_header{};
   fat_header.magic = sarc::SfatMagic;
   fat_header.header_size = sizeof(fat_header);
-  fat_header.num_files = u16(m_files.size());
+  if (m_files.size() > sarc::MaxNumFiles)
+    throw std::invalid_argument("SARC contains too many files");
+  fat_header.num_files = static_cast<u16>(m_files.size());
   fat_header.hash_multiplier = m_hash_multiplier;
   writer.Write(fat_header);
 
@@ -296,8 +313,8 @@ std::pair<u32, std::vector<u8>> SarcWriter::Write() {
   alignments.reserve(files.size());
 
   {
-    u32 rel_string_offset = 0;
-    u32 rel_data_offset = 0;
+    size_t rel_string_offset = 0;
+    size_t rel_data_offset = 0;
     for (const FileMap::value_type& pair : files) {
       const auto& [name, data] = pair;
       const u32 alignment = GetAlignmentForFile(name, data);
@@ -305,9 +322,9 @@ std::pair<u32, std::vector<u8>> SarcWriter::Write() {
 
       sarc::ResFatEntry entry{};
       entry.name_hash = sarc::HashName(m_hash_multiplier, name);
-      entry.rel_name_optional_offset = 1 << 24 | (rel_string_offset / 4);
-      entry.data_begin = util::AlignUp(rel_data_offset, alignment);
-      entry.data_end = entry.data_begin + data.size();
+      entry.rel_name_optional_offset = sarc::MakeNameOffset(rel_string_offset);
+      entry.data_begin = sarc::CheckedInteger<u32>(util::AlignUp(rel_data_offset, alignment));
+      entry.data_end = sarc::CheckedInteger<u32>(static_cast<size_t>(entry.data_begin) + data.size());
       writer.Write(entry);
 
       rel_data_offset = entry.data_end;
@@ -328,7 +345,7 @@ std::pair<u32, std::vector<u8>> SarcWriter::Write() {
   // File data
   const u32 required_alignment = absl::c_accumulate(alignments, 1u, std::lcm<u32, u32>);
   writer.AlignUp(required_alignment);
-  const u32 data_offset_begin = u32(writer.Tell());
+  const u32 data_offset_begin = sarc::CheckedInteger<u32>(writer.Tell());
   for (const auto& [pair, alignment] : easy_iterator::zip(files, alignments)) {
     writer.AlignUp(alignment);
     writer.WriteBytes(pair.second);
@@ -338,7 +355,7 @@ std::pair<u32, std::vector<u8>> SarcWriter::Write() {
   header.magic = sarc::SarcMagic;
   header.header_size = sizeof(header);
   header.bom = 0xFEFF;
-  header.file_size = writer.Tell();
+  header.file_size = sarc::CheckedInteger<u32>(writer.Tell());
   header.data_offset = data_offset_begin;
   header.version = 0x0100;
   writer.Seek(0);
@@ -396,7 +413,7 @@ u32 SarcWriter::GetAlignmentForFile(std::string_view name, tcb::span<const u8> d
   const std::string_view::size_type dot_pos = name.rfind('.');
   const std::string_view ext = dot_pos + 1 < name.size() ? name.substr(dot_pos + 1) : "";
 
-  u32 alignment = m_min_alignment;
+  u32 alignment = sarc::CheckedInteger<u32>(m_min_alignment);
 
   if (const auto it = m_alignment_map.find(ext); it != m_alignment_map.end()) {
     alignment = std::lcm(alignment, it->second);

@@ -96,8 +96,8 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://github.com/zeldamods/oead",
     packages=setuptools.find_packages(),
+    license="GPL-2.0-or-later",
     classifiers=[
-        "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
         "Topic :: Software Development :: Libraries",
         "Operating System :: OS Independent",
         "Programming Language :: C++",

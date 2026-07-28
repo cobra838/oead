@@ -31,7 +31,7 @@ constexpr u32 crc32(const CharType* data, std::size_t size) {
   for (std::size_t i = 0; i < size; ++i) {
     crc ^= u8(data[i]);
     for (std::size_t j = 0; j < 8; ++j) {
-      u32 mask = -(crc & 1);
+      u32 mask = 0u - (crc & 1u);
       crc = (crc >> 1) ^ (0xEDB88320 & mask);
     }
   }

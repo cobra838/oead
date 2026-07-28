@@ -42,6 +42,14 @@ enum class HeaderFlag : u32 {
   Utf8 = 1 << 1,
 };
 
+template <typename T>
+T CheckedInteger(size_t value) {
+  using Number = typename NumberType<T>::type;
+  if (value > std::numeric_limits<Number>::max())
+    throw std::invalid_argument("Integer is not representable");
+  return static_cast<Number>(value);
+}
+
 struct ResHeader {
   std::array<char, 4> magic;
   util::LeInt<u32> version;
@@ -64,7 +72,7 @@ template <typename T, size_t Factor = 4>
 struct CompactOffset {
   static constexpr size_t MaxDistance = [] {
     if constexpr (util::IsAnyOfType<T, U24<false>, U24<true>>())
-      return Factor * (1 << 24);
+      return Factor * ((1 << 24) - 1);
     else
       return Factor * std::numeric_limits<typename NumberType<T>::type>::max();
   }();
@@ -75,7 +83,7 @@ struct CompactOffset {
   constexpr void Set(size_t x) {
     if (x % Factor != 0 || x > MaxDistance)
       throw std::invalid_argument("Offset is not representable");
-    raw_value = x / Factor;
+    raw_value = CheckedInteger<T>(x / Factor);
   }
 
 private:
@@ -139,7 +147,7 @@ public:
   }
 
 private:
-  std::pair<u32, Parameter> ParseParameter(u32 offset) {
+  std::pair<u32, Parameter> ParseParameter(size_t offset) {
     const auto info = m_reader.Read<ResParameter>(offset).value();
     const auto crc32 = info.name_crc32;
     const auto data_offset = offset + info.data_rel_offset.Get();
@@ -200,7 +208,7 @@ private:
   }
 
   template <typename T>
-  std::vector<T> ParseBuffer(u32 data_offset) {
+  std::vector<T> ParseBuffer(size_t data_offset) {
     const size_t size = m_reader.Read<u32>(data_offset - 4).value();
     std::vector<T> buffer;
     buffer.reserve(size);
@@ -209,7 +217,7 @@ private:
     return buffer;
   }
 
-  std::pair<u32, ParameterObject> ParseObject(u32 offset) {
+  std::pair<u32, ParameterObject> ParseObject(size_t offset) {
     const auto info = m_reader.Read<ResParameterObj>(offset).value();
     const auto offset_to_params = offset + info.parameters_rel_offset.Get();
 
@@ -220,7 +228,7 @@ private:
     return {info.name_crc32, std::move(object)};
   }
 
-  std::pair<u32, ParameterList> ParseList(u32 offset) {
+  std::pair<u32, ParameterList> ParseList(size_t offset) {
     const auto info = m_reader.Read<ResParameterList>(offset).value();
     const auto offset_to_lists = offset + info.lists_rel_offset.Get();
     const auto offset_to_objects = offset + info.objects_rel_offset.Get();
@@ -240,7 +248,7 @@ private:
 
 template <typename T, typename T2>
 static void WriteBuffer(util::BinaryWriterBase<T2>& writer, const std::vector<T>& v) {
-  writer.Write(u32(v.size()));
+  writer.Write(CheckedInteger<u32>(v.size()));
   for (const auto& x : v)
     writer.Write(x);
 }
@@ -393,7 +401,7 @@ public:
   void WriteString(const Parameter& param) {
     const size_t parent_offset = offsets.at(&param);
     const std::string_view string = param.GetStringView();
-    const auto pair = string_offsets.emplace(string, u32(writer.Tell()));
+    const auto pair = string_offsets.emplace(string, CheckedInteger<u32>(writer.Tell()));
 
     // Write the data offset in the parent parameter structure.
     writer.RunAt(parent_offset + offsetof(ResParameter, data_rel_offset), [&](size_t) {
@@ -409,26 +417,26 @@ public:
   }
 
   void WriteList(Name name, const ParameterList& list) {
-    offsets.emplace(&list, u32(writer.Tell()));
+    offsets.emplace(&list, CheckedInteger<u32>(writer.Tell()));
     ++num_lists;
     ResParameterList data;
     data.name_crc32 = name.hash;
-    data.num_lists = u16(list.lists.size());
-    data.num_objects = u16(list.objects.size());
+    data.num_lists = CheckedInteger<util::LeInt<u16>>(list.lists.size());
+    data.num_objects = CheckedInteger<util::LeInt<u16>>(list.objects.size());
     writer.Write(data);
   }
 
   void WriteObject(Name name, const ParameterObject& object) {
-    offsets.emplace(&object, u32(writer.Tell()));
+    offsets.emplace(&object, CheckedInteger<u32>(writer.Tell()));
     ++num_objects;
     ResParameterObj data;
     data.name_crc32 = name.hash;
-    data.num_parameters = u16(object.params.size());
+    data.num_parameters = CheckedInteger<util::LeInt<u16>>(object.params.size());
     writer.Write(data);
   }
 
   void WriteParameter(Name name, const Parameter& parameter) {
-    offsets.emplace(&parameter, u32(writer.Tell()));
+    offsets.emplace(&parameter, CheckedInteger<u32>(writer.Tell()));
     ++num_parameters;
     ResParameter data;
     data.name_crc32 = name.hash;
@@ -439,14 +447,15 @@ public:
   template <typename T>
   void WriteOffsetForParent(const T& parent, size_t offset_in_parent_struct) {
     const u32 parent_offset = offsets.at(&parent);
-    writer.WriteCurrentOffsetAt<CompactOffset<util::LeInt<u16>>>(
-        parent_offset + offset_in_parent_struct, parent_offset);
+    writer.RunAt(parent_offset + offset_in_parent_struct, [this, parent_offset](size_t offset) {
+      writer.Write(CompactOffset<util::LeInt<u16>>{offset - parent_offset});
+    });
   }
 
   util::BinaryWriter writer{util::Endianness::Little};
-  u32 num_lists = 0;
-  u32 num_objects = 0;
-  u32 num_parameters = 0;
+  size_t num_lists = 0;
+  size_t num_objects = 0;
+  size_t num_parameters = 0;
   /// Parameters in serialization order.
   std::vector<std::reference_wrapper<const Parameter>> parameters_to_write;
   std::vector<std::reference_wrapper<const Parameter>> string_parameters_to_write;
@@ -487,14 +496,16 @@ std::vector<u8> ParameterIO::ToBinary() const {
   header.version = 2;
   header.flags[HeaderFlag::LittleEndian] = true;
   header.flags[HeaderFlag::Utf8] = true;
-  header.file_size = ctx.writer.Tell();
+  header.file_size = CheckedInteger<util::LeInt<u32>>(ctx.writer.Tell());
   header.pio_version = version;
-  header.offset_to_pio = u32(offset_to_pio - sizeof(ResHeader));
-  header.num_lists = ctx.num_lists;
-  header.num_objects = ctx.num_objects;
-  header.num_parameters = ctx.num_parameters;
-  header.data_section_size = string_section_begin - data_section_begin;
-  header.string_section_size = unk_section_begin - string_section_begin;
+  header.offset_to_pio = CheckedInteger<util::LeInt<u32>>(offset_to_pio - sizeof(ResHeader));
+  header.num_lists = CheckedInteger<util::LeInt<u32>>(ctx.num_lists);
+  header.num_objects = CheckedInteger<util::LeInt<u32>>(ctx.num_objects);
+  header.num_parameters = CheckedInteger<util::LeInt<u32>>(ctx.num_parameters);
+  header.data_section_size =
+      CheckedInteger<util::LeInt<u32>>(string_section_begin - data_section_begin);
+  header.string_section_size =
+      CheckedInteger<util::LeInt<u32>>(unk_section_begin - string_section_begin);
   header.unk_section_size = 0;
   ctx.writer.Seek(0);
   ctx.writer.Write(header);

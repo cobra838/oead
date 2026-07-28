@@ -20,6 +20,7 @@
 #pragma once
 
 #include <nonstd/span.h>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -130,10 +131,12 @@ public:
 
   void EmitScalar(std::string_view value, bool plain_implicit, bool quoted_implicit,
                   std::string_view tag = {}) {
+    if (value.size() > std::numeric_limits<int>::max())
+      throw std::length_error("YAML scalar exceeds libyaml's maximum length");
     yaml_event_t event;
     const auto style = value.empty() ? YAML_SINGLE_QUOTED_SCALAR_STYLE : YAML_ANY_SCALAR_STYLE;
     yaml_scalar_event_initialize(&event, nullptr, tag.empty() ? nullptr : (const u8*)tag.data(),
-                                 (const u8*)value.data(), value.size(), plain_implicit,
+                                 (const u8*)value.data(), static_cast<int>(value.size()), plain_implicit,
                                  quoted_implicit, style);
     Emit(event);
   }
