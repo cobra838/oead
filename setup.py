@@ -37,13 +37,36 @@ class CMakeBuild(build_ext):
                       '-DPYBIND11_FINDPYTHON=ON']
 
         cfg = 'Debug' if debug else 'Release'
-        build_args = [f'-j{os.cpu_count()}', '--config', cfg]
+        build_args = [f'-j{os.cpu_count()}']
+
+        generator = os.getenv('CMAKE_GENERATOR', '')
+        if not generator and platform.system() == "Windows":
+            import shutil
+            # Ninja needs MSVC to be available in the current environment.
+            if shutil.which("ninja") is not None and shutil.which("cl") is not None:
+                os.environ["CMAKE_GENERATOR"] = "Ninja"
+                generator = "Ninja"
+
+        generator_name = generator.lower()
+        uses_ninja = generator_name.startswith("ninja")
+        single_config_generators = {"ninja", "nmake makefiles", "mingw makefiles"}
+        is_multi_config = (
+            platform.system() == "Windows"
+            and generator_name not in single_config_generators
+        )
 
         if platform.system() == "Windows":
-            cmake_args += ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir)]
-            if sys.maxsize > 2**32:
-                cmake_args += ['-A', 'x64']
-            build_args += ['--', '/m']
+            if is_multi_config:
+                cmake_args += ['-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_{}={}'.format(cfg.upper(), extdir)]
+                if (
+                    not generator_name or generator_name.startswith("visual studio")
+                ) and sys.maxsize > 2**32:
+                    cmake_args += ['-A', 'x64']
+                build_args += ['--config', cfg]
+                if not uses_ninja:
+                    build_args += ['--', '/m']
+            else:
+                cmake_args += ['-DCMAKE_BUILD_TYPE=' + cfg]
         else:
             cmake_args += ['-DCMAKE_BUILD_TYPE=' + cfg]
 
