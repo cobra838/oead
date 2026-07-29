@@ -31,6 +31,45 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
 
+      - name: Initialize MSVC environment for Ninja
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $installation) {
+            throw "Could not find a Visual Studio installation with the C++ toolchain"
+          }
+          $devCmd = Join-Path $installation "Common7\Tools\VsDevCmd.bat"
+          $msvcEnvironment = cmd.exe /c "call `"$devCmd`" -no_logo -arch=x64 -host_arch=x64 >nul && set"
+          $variables = @(
+            'PATH', 'INCLUDE', 'LIB', 'LIBPATH', 'VCINSTALLDIR', 'VCToolsInstallDir',
+            'VCToolsRedistDir', 'VSINSTALLDIR', 'WindowsSdkDir', 'WindowsSDKLibVersion',
+            'WindowsSDKVersion', 'UniversalCRTSdkDir', 'UCRTVersion'
+          )
+          foreach ($line in $msvcEnvironment) {
+            $name, $value = $line -split '=', 2
+            if ($name -in $variables) {
+              Add-Content -LiteralPath $env:GITHUB_ENV -Value "${name}=${value}"
+            }
+          }
+
+      - name: Select Visual C++ runtime for delvewheel
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $runtime = Get-ChildItem -Path (Join-Path $env:VCToolsRedistDir 'x64') `
+            -Recurse -File -Filter msvcp140.dll |
+            Select-Object -First 1
+          if ($null -eq $runtime) {
+            throw "Could not find the Visual C++ x64 runtime"
+          }
+          $repairCommand = 'delvewheel repair --add-path "{0}" -w {{dest_dir}} -v {{wheel}}' -f $runtime.DirectoryName
+          Add-Content -LiteralPath $env:GITHUB_ENV `
+            -Value "CIBW_REPAIR_WHEEL_COMMAND_WINDOWS=$repairCommand"
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.1.1
 
