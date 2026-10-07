@@ -7,6 +7,19 @@ class DefaultValue:
     pass
 
 
+def test_parameter_python_int_stays_int():
+    int_param = oead.aamp.Parameter(1)
+    float_param = oead.aamp.Parameter(1.0)
+
+    assert int_param.type() == oead.aamp.Parameter.Type.Int
+    assert type(int_param.v) is int
+    assert int_param.v == 1
+
+    assert float_param.type() == oead.aamp.Parameter.Type.F32
+    assert type(float_param.v) is float
+    assert float_param.v == 1.0
+
+
 def test_parameter_map_mapping_operations():
     params = oead.aamp.ParameterMap()
     first = oead.aamp.Name("First")

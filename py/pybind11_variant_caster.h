@@ -71,6 +71,12 @@ template <template <typename...> class V, typename... Ts>
 struct oead_variant_caster<V<Ts...>> {
   template <typename T, bool ptr>
   bool do_load(handle src, bool convert) {
+    using Decayed = std::decay_t<T>;
+    if constexpr (std::is_floating_point_v<Decayed> ||
+                  oead::util::IsAnyOfType<Decayed, oead::F32, oead::F64>()) {
+      if (!convert && PyLong_Check(src.ptr()) && !PyBool_Check(src.ptr()))
+        return false;
+    }
     if constexpr (oead::util::IsAnyOfType<T, bool, u32, s32, f32, oead::U32, oead::S32,
                                           oead::F32>()) {
       convert = false;
