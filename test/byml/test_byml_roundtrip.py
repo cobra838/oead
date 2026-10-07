@@ -1,5 +1,6 @@
 import pytest
 import oead
+import struct
 
 from utils import make_test_cases
 
@@ -37,6 +38,34 @@ def test_byml_roundtrip_mono_typed_array():
     assert isinstance(array, oead.byml.Array)
     assert [int(value) for value in array] == [42, -5]
     assert oead.byml.to_binary(array, big_endian=False, version=10) == data
+
+
+def test_byml_v2_does_not_align_between_binary_values():
+    array = oead.byml.Array([oead.Bytes([0x41]), oead.Bytes([0x42, 0x43])])
+    data = bytes(oead.byml.to_binary(array, big_endian=False, version=2))
+    root_offset = struct.unpack_from("<I", data, 12)[0]
+    first, second = struct.unpack_from("<II", data, root_offset + 8)
+
+    assert data[:4] == b"YB\x02\x00"
+    assert first % 4 == 0
+    assert second == first + 4 + 1
+    assert list(oead.byml.from_binary(data)) == list(array)
+
+
+def test_byml_equal_maps_reuse_binary_node():
+    first = oead.byml.Dictionary()
+    second = oead.byml.Dictionary()
+    for index in range(16):
+        first[f"key_{index}"] = oead.S32(index)
+    for index in reversed(range(16)):
+        second[f"key_{index}"] = oead.S32(index)
+
+    data = bytes(oead.byml.to_binary(oead.byml.Array([first, second]), False, 2))
+    root_offset = struct.unpack_from("<I", data, 12)[0]
+    first_offset, second_offset = struct.unpack_from("<II", data, root_offset + 8)
+
+    assert first == second
+    assert first_offset == second_offset
 
 
 @pytest.mark.parametrize("file", cases_bin)
